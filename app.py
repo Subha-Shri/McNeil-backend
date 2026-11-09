@@ -9,8 +9,7 @@ app = FastAPI(title="McNeil Loop Sheet Engine")
 
 @app.get("/")
 def read_root():
-    return {"status": "Python Loop Sheet Engine is running!"}
-
+    return {"status": "Python Loop Sheets Engine is running!","status": "Progressing - GS"}
 @app.get("/generate-loop-sheet/{tag_id}")
 def generate_loop_sheet(tag_id: str):
     temp_dir = tempfile.gettempdir()
