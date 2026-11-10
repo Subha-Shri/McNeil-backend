@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <string>
+#include <fstream>
 #include <sstream>
 #include <unistd.h>
 #include <sys/types.h>
@@ -11,7 +12,7 @@ int main() {
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::stoi(port_env) : 10000;
 
-    std::cout << "Starting McNeil C++ Loop Sheet Server on port " << port << "..." << std::endl;
+    std::cout << "Starting C++ UI Server on port " << port << "..." << std::endl;
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) return 1;
@@ -27,40 +28,59 @@ int main() {
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) return 1;
     if (listen(server_fd, 10) < 0) return 1;
 
-    std::cout << "C++ Server is live and routing requests!" << std::endl;
+    std::cout << "C++ Server is active and routing requests to Python!" << std::endl;
 
     while (true) {
         int addrlen = sizeof(address);
         int new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
         if (new_socket < 0) continue;
 
-        char buffer[2048] = {0};
+        char buffer[4096] = {0};
         read(new_socket, buffer, sizeof(buffer) - 1);
         std::string request(buffer);
 
-        // Check if the request is asking for the PDF download
+        // Check if request is asking for PDF generation
         if (request.find("GET /generate-loop-sheet") != std::string::npos) {
-            // Minimal valid PDF byte stream response
-            std::string pdfContent = 
-                "%PDF-1.4\n"
-                "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-                "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-                "3 0 obj<</Type/Page/Parent 2 0 R/Resources<<>>/MediaBox[0 0 612 792]/Contents 4 0 R>>endobj\n"
-                "4 0 obj<</Length 54>>stream\n"
-                "BT /F1 24 Tf 100 700 Td (McNeil Loop Sheet PDF Generated!) Tj ET\n"
-                "endstream\n"
-                "endobj\n"
-                "xref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000215 00000 n \n"
-                "trailer<</Size 5/Root 1 0 R>>\n"
-                "startxref\n327\n%%EOF";
+            // Extract tag parameter from URL (e.g., /generate-loop-sheet?tag=TAG-001)
+            std::string tag = "TAG-001";
+            size_t tagPos = request.find("tag=");
+            if (tagPos != std::string::npos) {
+                size_t endPos = request.find(" ", tagPos);
+                tag = request.substr(tagPos + 4, endPos - (tagPos + 4));
+                // Decode URL space encoding (%20)
+                size_t space;
+                while ((space = tag.find("%20")) != std::string::npos) {
+                    tag.replace(space, 3, " ");
+                }
+            }
 
-            std::string response = "HTTP/1.1 200 OK\r\n"
-                                   "Content-Type: application/pdf\r\n"
-                                   "Content-Disposition: attachment; filename=\"loop_sheet.pdf\"\r\n"
-                                   "Content-Length: " + std::to_string(pdfContent.length()) + "\r\n"
-                                   "Connection: close\r\n\r\n" + pdfContent;
-            
-            send(new_socket, response.c_str(), response.length(), 0);
+            // CRITICAL: Execute the Python ReportLab generator script with the dynamic tag argument
+            std::string command = "python3 loop_sheet_generator.py \"" + tag + "\"";
+            int ret = system(command.c_str());
+
+            if (ret == 0) {
+                // Read the freshly generated PDF from disk
+                std::ifstream pdfFile("output.pdf", std::ios::binary);
+                if (pdfFile) {
+                    std::ostringstream pdfStream;
+                    pdfStream << pdfFile.rdbuf();
+                    std::string pdfContent = pdfStream.str();
+                    pdfFile.close();
+
+                    std::string response = "HTTP/1.1 200 OK\r\n"
+                                           "Content-Type: application/pdf\r\n"
+                                           "Content-Disposition: attachment; filename=\"loop_sheet_" + tag + ".pdf\"\r\n"
+                                           "Content-Length: " + std::to_string(pdfContent.length()) + "\r\n"
+                                           "Connection: close\r\n\r\n" + pdfContent;
+                    send(new_socket, response.c_str(), response.length(), 0);
+                } else {
+                    std::string err = "HTTP/1.1 500 Internal Server Error\r\n\r\nError: output.pdf could not be read.";
+                    send(new_socket, err.c_str(), err.length(), 0);
+                }
+            } else {
+                std::string err = "HTTP/1.1 500 Internal Server Error\r\n\r\nError: Python script execution failed.";
+                send(new_socket, err.c_str(), err.length(), 0);
+            }
         } 
         else {
             // Serve the Dashboard HTML UI
@@ -85,8 +105,8 @@ int main() {
                 "<body>\n"
                 "    <div class='card'>\n"
                 "        <h2>McNeil Loop Sheet Generator</h2>\n"
-                "        <div class='status'>Status: <span>C++ Engine is running!</span></div>\n"
-                "        <input type='text' id='tagInput' value='TAG - 102'>\n"
+                "        <div class='status'>Status: <span>C++ UI & Python Bridge Active</span></div>\n"
+                "        <input type='text' id='tagInput' value='TAG-001'>\n"
                 "        <button class='btn' onclick='generatePDF()'>Download Loop Sheet PDF</button>\n"
                 "    </div>\n"
                 "    <script>\n"
